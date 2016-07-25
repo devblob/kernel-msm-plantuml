@@ -1,0 +1,329 @@
+@startumlsdhci_send_command
+
+!include ../../helper.pu
+
+title SDHCI Probe （高通平台）
+
+box "MMC Host Layer"
+	participant "sdhci-msm.c" as sdhcimsm
+	participant "sdhci-pltfm.c" as sdhcip
+	participant "sdhci.c" as sdhci
+end box
+
+box "MMC Core Layer"
+	participant "cd-gpio.c" as cdgpio
+	participant "host.c" as mhost
+	participant "core.c" as mcore
+	control "mmc_rescan()" as mrescan
+	participant "mmc.c" as mmc 
+	participant "mmc_ops.c" as mops
+	participant "bus.c" as mbus
+end box
+
+box "MMC Card Layer"
+	participant "block.c" as mblk
+end box
+
+box "Drivers Base"
+	participant "core.c" as bscore
+	participant "bus.c" as bsbus
+	participant "driver.c" as bsdriver
+	participant "dd.c" as bsdd
+end box
+
+box "Kernel Core"
+	participant "workqueue.c" as wq
+	participant "softirq.c" as sirq
+	participant "irq/" as irq
+end box
+
+
+== 内核启动 ==
+send([, mcore, initcall(mmc_init))
+note right : mmc子系统初始化
+send(mcore, mbus, mmc_register_bus())
+send(mbus, bsbus, bus_register(&mmc_bus_type))
+note right
+注册mmc总线：
+static struct bus_type mmc_bus_type = {
+    .name       = "mmc",
+    .dev_attrs  = mmc_dev_attrs,
+    .match      = mmc_bus_match,
+    .uevent     = mmc_bus_uevent,
+    .probe      = mmc_bus_probe,
+    .remove     = mmc_bus_remove,
+    .shutdown        = mmc_bus_shutdown,
+    .pm     = &mmc_bus_pm_ops,
+};
+end note
+back(mbus, bsbus)
+back(mcore, mbus)
+back([, mcore)
+
+send([, mblk, initcall(mmc_blk_init))
+note right : mmc块设备初始化
+send(mblk, mbus, mmc_register_driver(&mmc_driver))
+send(mbus, bsdriver, driver_register(&drv->drv))
+note right
+设置驱动的总线类型为mmc_bus_type，
+并在此总线上注册驱动。
+end note
+back(mbus, bsdriver)
+back(mblk, mbus)
+back([, mblk)
+
+== SDHCI Probe ==
+send([, sdhcimsm, sdhci_msm_probe)
+hnote left of sdhcimsm #cyan
+高通SD主机设备Probe
+end note
+send(sdhcimsm, sdhcip, sdhci_pltfm_init())
+send(sdhcip, sdhci, sdhci_alloc_host())
+ssend(sdhci, mmc_alloc_host)
+send(sdhci, wq, INIT_DELAYED_WORK(&host->detect, mmc_rescan))
+note left : 初始化延时工作队列mmc_rescan()
+back(sdhci, wq)
+sback(sdhci)
+back(sdhcip, sdhci)
+back(sdhcimsm, sdhcip)
+send(sdhcimsm, cdgpio, mmc_cd_gpio_request())
+note right
+注册GPIO中断。
+插拔卡时将触发中断，
+并调用中断处理函数mmc_cd_gpio_irqt(),
+仅用于SD卡，MMC不用。
+end note
+send(cdgpio, irq, request_threaded_irq(..., mmc_cd_gpio_irqt, ...))
+back(cdgpio, irq)
+back(sdhcimsm, cdgpio)
+send(sdhcimsm, sdhci, sdhci_add_host())
+send(sdhci, sirq, tasklet_init(&host->card_tasklet, sdhci_tasklet_card, ...))
+back(sdhci, sirq)
+send(sdhci, sirq, tasklet_init(&host->finish_tasklet, sdhci_tasklet_finish,))
+back(sdhci, sirq)
+send(sdhci, irq, request_irq(host->irq, sdhci_irq, ...))
+note left : 注册主机的中断服务
+back(sdhci, irq)
+ssend(sdhci, sdhci_init())
+sback(sdhci)
+send(sdhci, mhost, mmc_add_host())
+note left : 注册主机。在此之前，必须做好服务请求的一切准备。
+send(mhost, mcore, mmc_start_host())
+ssend(mcore, mmc_detect_change())
+asend(mcore, mrescan, mmc_schedule_delayed_work())
+note right : 调度延时工作队列mmc_rescan()
+sback(mcore)
+back(mhost, mcore)
+back(sdhci, mhost)
+ssend(sdhci, sdhci_enable_card_detection())
+note left : 开启检测SD卡插拔的中断
+sback(sdhci)
+back(sdhcimsm, sdhci)
+back([, sdhcimsm)
+send(mrescan, mcore, mmc_rescan_try_freq())
+note right of mcore
+以此顺序检测SDIO,SD,MMC卡：
+if (!mmc_attach_sdio(host))主控
+	return 0;
+if (!mmc_attach_sd(host))
+	return 0;
+if (!mmc_attach_mmc(host))
+	return 0;
+end note
+
+== MMC卡初始化 ==
+send(mcore, mmc, mmc_attach_mmc(host))
+send(mmc, mops, mmc_send_op_cond(host, 0, &ocr))
+note left of mops : 发送CMD1，获取OCR。
+back(mmc, mops)
+ssend(mmc, mmc_attach_bus_ops())
+note right of mmc : 挂载总线操作函数
+sback(mmc)
+send(mmc, mcore, mmc_select_voltage())
+note right of mcore : 根据获取的OCR，屏蔽不支持的电压，并选择最低的电压。
+back(mmc, mcore)
+ssend(mmc, mmc_init_card(..., host->ocr, ...))
+send(mmc, mcore, mmc_set_signal_voltage(..., MMC_SIGNAL_VOLTAGE_330, ...))
+note right of mcore : 进行初始化时，要把MMC卡的电压设置为3.3V。
+back(mmc, mcore)
+
+send(mmc, mops, mmc_go_idle())
+note left of mops : 主机设置OCR之前，需发送CMD0使MMC卡进入Idle状态。 
+
+!define MMC_GO_IDLE
+!ifdef MMC_GO_IDLE
+send(mops, mcore, mmc_wait_for_cmd(..., &cmd, ...))
+ssend(mcore, mmc_wait_for_req(host, &mrq))
+ssend(mcore, __mmc_start_req(host, mrq))
+ssend(mcore, mmc_start_request(host, mrq))
+send(mcore, sdhci, host->ops->request(host, mrq))
+note right of sdhci
+回调sdhci_request()
+此函数在sdhci.c中的sdhci_add_host()中被赋值：
+mmc->ops = &sdhci_ops;
+end note
+ssend(sdhci, sdhci_send_command())
+ssend(sdhci, sdhci_prepare_data(host, cmd))
+note right of sdhci : 准备ADMA传输数据
+sback(sdhci)
+ssend(sdhci, sdhci_writel(..., SDHCI_ARGUMENT))
+note right of sdhci : 写入命令参数寄存器(08h)
+sback(sdhci)
+ssend(sdhci, sdhci_set_transfer_mode(host, cmd))
+note right of sdhci : 设置传输模式寄存器(0Ch)
+sback(sdhci)
+ssend(sdhci, sdhci_writew(..., SDHCI_COMMAND))
+note right of sdhci : 写入命令寄存器(0Eh)，触发主控产生命令。
+sback(sdhci)
+sback(sdhci)
+back(mcore, sdhci)
+sback(mcore)
+sback(mcore)
+sback(mcore)
+back(mops, mcore)
+!endif
+
+back(mmc, mops)
+
+send(mmc, mops, mmc_send_op_cond(host, ..., &rocr))
+note left of mops : 将选择好的电压发给卡设备，同时表示主机支持高容量存储。
+back(mmc, mops)
+
+send(mmc, mops, mmc_all_send_cid(host, cid))
+note left of mops : 获取CID
+back(mmc, mops)
+
+alt 新卡
+send(mmc, mbus, mmc_alloc_card())
+note left of mbus : 为新卡分配一个mmc_card结构
+send(mmc, bscore, device_initialize(&card->dev))
+note left : 初始化卡的设备结构
+back(mmc, bscore)
+note right of mmc : 设备总线设为mmc_bus_type
+back(mmc, mbus)
+end
+
+send(mmc, mops, mmc_set_relative_addr(card))
+note left of mops : 设置RCA. 卡在公布RCA后进入数据传输模式。
+back(mmc, mops)
+
+alt 新卡
+send(mmc, mops, mmc_send_csd())
+note left of mops : 获取CSD
+back(mmc, mops)
+end
+
+send(mmc, mops, mmc_select_card(card))
+note left of mops : 选择卡。卡从Stand-by进入Transfer状态。
+back(mmc, mops)
+
+alt 新卡
+ssend(mmc, mmc_get_ext_csd())
+note right of mmc : 获取EXT_CSD
+sback(mmc)
+end
+
+ssend(mmc, mmc_select_bus_speed(card, ext_csd))
+note right mmc
+按照
+mmc_select_hs400(),
+mmc_select_hs200(),
+mmc_select_hs()
+的顺序选择最高的总线速度。
+end note
+ssend(mmc, mmc_select_hs200(card, ext_csd))
+send(mmc, mcore, mmc_set_signal_voltage(host, MMC_SIGNAL_VOLTAGE_120, ...))
+back(mmc, mcore)
+send(mmc, mops, mmc_switch(..., EXT_CSD_HS_TIMING, ...))
+note left of mops : 将卡的时序切换到HS200模式
+back(mmc, mops)
+send(mmc, mcore, mmc_set_timing(host, MMC_TIMING_MMC_HS200))
+note right of mcore : 主机时序也切换到HS200模式
+back(mmc, mcore)
+send(mmc, sdhci, host->ops->execute_tuning)
+note right of sdhci
+回调sdhci_execute_tuning()执行总线采样调整,
+此函数在sdhci.c中的sdhci_add_host()中被赋予mmc_host的ops。
+end note
+send(sdhci, sdhcimsm, host->ops->execute_tuning)
+note right of sdhcimsm
+回调sdhci_msm_execute_tuning()，
+此函数在之前主机probe时调用的sdhci_pltfm_init()中
+被赋予sdhci_host的ops。
+end note
+back(sdhci, sdhcimsm)
+back(mmc, sdhci)
+sback(mmc)
+ssend(mmc, mmc_select_bus_width(card, 0, ext_csd))
+note right of mmc : 选择同时被主机和卡支持的总线宽度
+sback(mmc)
+sback(mmc)
+sback(mmc)
+send(mmc, mops, mmc_switch(...,	EXT_CSD_HPI_MGMT, ...))
+note left : 如果卡支持HPI，开启之。
+back(mmc, mops)
+send(mmc, mops, mmc_switch(...,	EXT_CSD_CACHE_CTRL, ...))
+note left : 如果卡支持Cache，开启之。
+back(mmc, mops)
+send(mmc, mops, mmc_switch(...,	EXT_CSD_PACKED_EVENT_EN, ...))
+note left : 如果卡支持Packed，开启之。
+back(mmc, mops)
+
+alt 新卡
+send(mmc, wq, INIT_DELAYED_WORK(&card->bkops_info.dw, mmc_start_idle_time_bkops, ...))
+note left
+如果卡支持BKOPS，开启之。
+在空闲时将调度延时工作队列启动卡的后台操作。
+end note
+back(mmc, wq)
+end
+
+send(mmc, mbus, mmc_add_card(host->card))
+note left : 注册一个新的MMC卡
+
+!define MMC_ADD_CARD
+!ifdef MMC_ADD_CARD
+send(mbus, bscore, device_add(&card->dev))
+note left : 添加卡设备
+send(bscore, bsbus, bus_add_device(dev))
+note left : 添加设备到总线
+back(bscore, bsbus)
+send(bscore, bsbus, bus_probe_device(dev))
+note left : 为加入的新设备探测匹配的驱动
+send(bsbus, bsdd, device_attach(dev))
+note left : 轮询总线上的驱动链表，查找匹配的驱动
+send(bsdd, bsbus, bus_for_each_drv(dev->bus, NULL, dev, __device_attach))
+send(bsbus, bsdd, driver_probe_device(drv, dev))
+note left : 找到匹配的驱动后，调用driver_probe_device()对设备和驱动进行绑定。
+ssend(bsdd, really_probe(dev, drv))
+send(bsdd, mbus, dev->bus->probe(dev))
+note right of mbus
+dev->driver = drv;
+回调mmc_bus_probe()。
+end note
+send(mbus, mblk, drv->probe(card))
+note left of mblk
+回调mmc_blk_probe(card),
+开始mmc块设备驱动的Probe
+end note
+back(mbus, mblk)
+back(bsdd, mbus)
+sback(bsdd)
+back(bsbus, bsdd)
+back(bsdd, bsbus)
+back(bsbus, bsdd)
+back(bscore, bsbus)
+back(mbus, bscore)
+!endif
+
+back(mmc, mbus)
+send(mmc, mcore, mmc_init_clk_scaling(host))
+note right : 初始化Clock Scaling
+back(mmc, mcore)
+back(mcore, mmc)
+back(mrescan, mcore)
+send(mrescan, mcore, mmc_release_host())
+back(mrescan, mcore)
+deactivate mrescan
+
+@enduml

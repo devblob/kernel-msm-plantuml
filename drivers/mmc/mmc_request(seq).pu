@@ -1,0 +1,74 @@
+@startuml
+
+!include ../../helper.pu
+
+title I/O请求处理
+
+hide footbox
+
+box "Block Layer"
+	participant "block-core.c" as bcore
+end box
+
+box "MMC Card Layer"
+	participant "queue.c" as mq 
+	control "mmc_queue_thread()" as mqthread
+	participant "block.c" as mblk
+end box
+
+box "MMC Core Layer"
+	participant "core.c" as mcore
+end box
+
+box "MMC Host Layer"
+	participant "sdhci.c" as sdhci
+end box
+
+asend([, bcore, blk_delay_work())
+hnote left of bcore #cyan : I/O调度器为mmc的请求队列进行调度
+ssend(bcore, __blk_run_queue(q))
+send(bcore, mq, q->request_fn(q))
+note right
+回调mmc_request(),
+此函数在mmc块设备驱动probe时被指定。
+end note
+asend(mq, mqthread, wake_up_process(mq->thread))
+note right : 唤醒内核线程mmc_queue_thread()处理请求队列
+back(bcore, mq)
+sback(bcore)
+back([, bcore)
+send(mqthread, mblk, mq->issue_fn())
+note right
+回调mmc_blk_issue_rq()
+此函数在MMC块设备驱动Probe时
+所调用的mmc_blk_alloc_req()中赋值：
+md->queue.issue_fn = mmc_blk_issue_rq;
+end note
+ssend(mblk, mmc_blk_issue_rw_rq())
+send(mblk, mcore, mmc_start_req(card->host, areq, ...))
+note right
+开始一个非阻塞的请求：
+如果之前的数据请求还在处理中，则等待其完成后，再开始新的数据请求，并立即返回，不等待完成，。
+如果没有正在处理的数据请求，则开始新的数据请求并立即返回，不等待完成。
+end note
+ssend(mcore, __mmc_start_data_req(host, areq->mrq))
+note right of mcore : 开始新的数据请求
+ssend(mcore, mmc_start_request(host, mrq))
+send(mcore, sdhci, host->ops->request(host, mrq))
+note right
+回调sdhci_request()
+此函数在sdhci.c中的sdhci_add_host()中被传给mmc_host的ops：
+mmc->ops = &sdhci_ops;
+end note
+ssend(sdhci, sdhci_send_command(host, mrq->cmd))
+note right of sdhci : 访问主控寄存器向设备发送命令
+sback(sdhci)
+back(mcore, sdhci)
+sback(mcore)
+sback(mcore)
+back(mblk, mcore)
+sback(mblk)
+back(mqthread, mblk)
+deactivate mqthread
+
+@enduml

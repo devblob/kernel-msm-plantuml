@@ -1,0 +1,118 @@
+@startuml
+
+!include ../../helper.pu
+
+title SD卡插拔中断服务
+
+box "MMC Core Layer"
+	participant "cd-gpio.c" as cdgpio
+	participant "core.c" as mcore
+	control "mmc_rescan()" as mrescan
+	participant "sd.c" as sd
+	participant "sd_ops.c" as sdops
+	participant "mmc_ops.c" as mops
+	participant "bus.c" as mbus
+end box
+
+box "MMC Host Layer"
+	participant "sdhci.c" as sdhci
+end box
+
+asend([, cdgpio, mmc_cd_gpio_irqt())
+hnote left of cdgpio #cyan
+SD卡槽的插拔触发此中断服务
+end note
+
+send(cdgpio, mcore, mmc_detect_change())
+asend(mcore, mrescan, mmc_schedule_delayed_work())
+note right : 调度延时工作队列mmc_rescan()
+back(cdgpio, mcore)
+deactivate cdgpio
+
+send(mrescan, mcore, mmc_rescan_try_freq())
+
+== SD卡初始化 ==
+send(mcore, sd, mmc_attach_sd())
+note right : SD卡初始化开始
+send(sd, sdops, mmc_send_app_op_cond(host, 0, &ocr))
+note left of sdops : 发送ACMD41,获取OCR。
+back(sd, sdops)
+ssend(sd, mmc_sd_attach_bus_ops())
+note right of sd : 挂载总线操作函数
+sback(sd)
+send(sd, mcore, mmc_select_voltage())
+note right of mcore : 根据获取的OCR，屏蔽不支持的电压，并选择最低的电压。
+back(sd, mcore)
+ssend(sd, mmc_sd_init_card(host, host->ocr, NULL))
+send(sd, mcore, mmc_set_signal_voltage(..., MMC_SIGNAL_VOLTAGE_330, ...))
+note right of mcore: 以3.3V的IO电压进行初始化
+back(sd, mcore)
+ssend(sd, mmc_sd_get_cid(host, ocr, cid, &rocr))
+note right of sd : 获取CID
+send(sd, mops, mmc_go_idle())
+note left of mops : 主机设置OCR之前，需让SD卡进入Idle状态。
+back(sd, mops)
+send(sd, sdops, mmc_send_app_op_cond(host, ocr, rocr))
+note left of sdops : 将选择好的电压发给卡设备
+back(sd, sdops)
+send(sd, mops, mmc_all_send_cid(host, cid))
+note left of mops : 获取CID
+back(sd, mops)
+sback(sd)
+
+alt 新卡
+send(sd, mbus, mmc_alloc_card())
+note left of mbus : 如果是新卡，则分配并初始化一个新的mmc_card结构。
+back(sd, mbus)
+end
+
+send(sd, sdops, mmc_send_relative_addr())
+note left of sdops : 获取RCA
+back(sd, sdops)
+
+alt 新卡
+ssend(sd, mmc_sd_get_csd())
+note right of sd : 获取CSD
+sback(sd)
+end
+
+send(sd, mops, mmc_select_card(card))
+note left of mops : 选择卡
+back(sd, mops)
+ssend(sd, mmc_sd_setup_card())
+sback(sd)
+
+alt UHS-I
+ssend(sd, mmc_sd_init_uhs_card())
+send(sd, sdhci, card->host->ops->execute_tuning)
+note left of sdhci
+回调sdhci_execute_tuning()执行总线采样调整,
+此函数在sdhci.c中的sdhci_add_host()中被传给mmc_host的ops。
+end note
+back(sd, sdhci)
+sback(sd)
+else High Speed
+ssend(sd, mmc_sd_switch_hs())
+send(sd, sdops, mmc_app_set_bus_width(card, ...))
+note right : SD卡切换到宽总线
+back(sd, sdops)
+send(sd, mcore, mmc_set_bus_width(host, ...))
+note right : 主机切换到宽总线
+back(sd, mcore)
+sback(sd)
+end
+
+sback(sd)
+send(sd, mcore, mmc_add_card())
+note right : 注册一个新的MMC卡
+back(sd, mcore)
+send(sd, mcore, mmc_init_clk_scaling())
+note right : 初始化Clock Scaling
+back(sd, mcore)
+back(mcore, sd)
+back(mrescan, mcore)
+send(mrescan, mcore, mmc_release_host())
+back(mrescan, mcore)
+deactivate mrescan
+
+@enduml

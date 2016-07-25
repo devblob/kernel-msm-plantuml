@@ -1,0 +1,17 @@
+@startuml
+
+start
+
+:sdhci_pltfm_init();
+:从设备树提取平台数据;
+:设置时钟;
+:设置调压器并复位;
+:软件复位core;
+:开启SDHC模式;
+:设置电源控制中断;
+:设置主机能力;
+:sdhci_add_host();
+
+end
+
+@enduml

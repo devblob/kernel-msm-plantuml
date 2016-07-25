@@ -1,0 +1,35 @@
+!definelong send(from,to,msg)
+	from->to : msg
+	activate to
+!enddefinelong
+
+!definelong ssend(from,msg)
+	send(from,from,msg)
+!enddefinelong
+
+!definelong asend(from,to,msg)
+	from->>to : msg
+	activate to
+!enddefinelong
+
+!definelong sasend(from,msg)
+	asend(from,from,msg)
+!enddefinelong
+
+!definelong back(to,from)
+	to<<--from
+	deactivate from
+!enddefinelong
+
+!definelong sback(to)
+	back(to,to)
+!enddefinelong
+
+!definelong return(to,from,msg)
+	to<<--from : msg
+	deactivate from
+!enddefinelong
+
+!definelong sreturn(to,msg)
+	return(to,to,msg)
+!enddefinelong

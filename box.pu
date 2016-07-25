@@ -1,0 +1,46 @@
+box "MMC Card Layer"
+	participant "block.c" as mblk
+	participant "queue.c" as mq 
+	control "mmc_queue_thread()" as mqthread
+end box
+
+
+box "MMC Core Layer"
+	participant "core.c" as mcore
+	participant "host.c" as mhost
+	participant "cd-gpio.c" as cdgpio
+	participant "mmc.c" as mmc 
+	participant "sd.c" as sd
+	participant "sd_ops.c" as sdops
+	participant "mmc_ops.c" as mops
+	participant "bus.c" as mbus
+	control "mmc_rescan()" as mrescan
+end box
+
+
+box "MMC Host Layer"
+	participant "sdhci.c" as sdhci
+	participant "sdhci-msm.c" as sdhcimsm
+	participant "sdhci-pltfm.c" as sdhcip
+	participant "cd-gpio.c" as cdgpio
+end box
+
+
+box "Block Layer"
+	participant "block-core.c" as bcore
+	participant "block-exec.c" as bexec
+end box
+
+box "Kernel Core"
+	participant "kthread.c" as kthread
+	participant "softirq.c" as sirq
+	participant "workqueue.c" as wq
+	participant "irq/" as irq
+end box
+
+box "Drivers Base"
+	participant "core.c" as bscore
+	participant "bus.c" as bsbus
+	participant "driver.c" as bsdriver
+	participant "dd.c" as bsdd
+end box

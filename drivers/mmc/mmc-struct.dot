@@ -1,0 +1,39 @@
+digraph mmc{ 
+  rankdir=TB; 
+
+  node [shape="record"];    
+  mmc_host [label="{<head>mmc_host|...|<ops>const struct mmc_host_ops *ops;|...|<card>struct mmc_card   *card;|...|<private>unsigned long private[0];}"]; 
+  sdhci_host [label="{<head>sdhci_host|...|<ops>const struct sdhci_ops *ops;|...|<mmc>struct mmc_host *mmc;|...|<private>unsigned long private[0];}"]; 
+  sdhci_pltfm_host [label="{<head>sdhci_pltfm_host|...|<priv>void *priv;|...}"]; 
+  sdhci_msm_host [label="{<head>sdhci_msm_host|...|<mmc>struct mmc_host *mmc;|<pdata>struct sdhci_msm_pltfm_data *pdata;|...}"]; 
+  sdhci_pltfm_data [label="{<head>sdhci_pltfm_data|<ops>struct sdhci_ops *ops;|unsigned int quirks;}"]; 
+  sdhci_ops [label="{<head>sdhci_ops|.set_uhs_signaling|...|<execute_tuning>.execute_tuning|...}"]; 
+  mmc_host_ops [label="{<head>mmc_host_ops|.pre_req|...|<sdhci_request>.sdhci_request|...|<execute_tuning>.execute_tuning|...}"];
+  mmc_card [label="{<head>mmc_card|<host>struct mmc_host *host;|...}"]
+
+  node [shape="box"] 
+  sdhci_msm_execute_tuning [label="int sdhci_msm_execute_tuning(struct sdhci_host *host, u32 opcode)"]; 
+  sdhci_request [label="static void sdhci_request(struct mmc_host *mmc, struct mmc_request *mrq)"]
+  sdhci_execute_tuning [label="static int sdhci_execute_tuning(struct mmc_host *mmc, u32 opcode)"]
+
+  mmc_host:ops:e -> mmc_host_ops:head:w;
+  mmc_host:card:e -> mmc_card:head:w;
+  mmc_host:private:e -> sdhci_host:head:w;
+
+  mmc_card:host:e -> mmc_host:head:w;
+
+  sdhci_host:mmc:e -> mmc_host:head:e; 
+  sdhci_host:private:e -> sdhci_pltfm_host:head:w; 
+  sdhci_host:ops:e -> sdhci_ops:head:w; 
+
+  sdhci_pltfm_data:ops:e -> sdhci_ops:head:w;
+  sdhci_pltfm_host:priv:e -> sdhci_msm_host:head:w; 
+
+  sdhci_msm_host:mmc:w -> mmc_host:head:w; 
+  sdhci_msm_host:pdata:e -> sdhci_pltfm_data:head:w; 
+
+  sdhci_ops:execute_tuning:e -> sdhci_msm_execute_tuning; 
+
+  mmc_host_ops:sdhci_request:e -> sdhci_request;
+  mmc_host_ops:execute_tuning:e -> sdhci_execute_tuning;
+} 

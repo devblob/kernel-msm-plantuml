@@ -1,0 +1,43 @@
+@startuml
+
+!include ../../helper.pu
+
+title SDHCI中断服务
+
+box "MMC Host Layer"
+	participant "sdhci.c" as sdhci
+end box
+
+box "Kernel Core"
+	participant "softirq.c" as sirq
+end box
+
+send([, sdhci, sdhci_irq())
+hnote left of sdhci #green : SDHCI发出中断请求
+
+ssend(sdhci, sdhci_readl(host, SDHCI_INT_STATUS))
+note right of sdhci : 读取中断状态寄存器
+sback(sdhci)
+
+alt 命令相关的中断
+ssend(sdhci, sdhci_cmd_irq())
+ssend(sdhci, sdhci_finish_command(host))
+send(sdhci, sirq, tasklet_schedule(&host->finish_tasklet))
+note right : 调度sdhci_tasklet_finish()
+back(sdhci, sirq)
+sback(sdhci)
+sback(sdhci)
+end
+
+alt 数据相关的中断
+ssend(sdhci, sdhci_data_irq())
+ssend(sdhci, sdhci_finish_data())
+send(sdhci, sirq, tasklet_schedule(&host->finish_tasklet))
+note right : 调度sdhci_tasklet_finish()
+back(sdhci, sirq)
+sback(sdhci)
+sback(sdhci)
+end
+back([, sdhci)
+
+@enduml

@@ -1,0 +1,44 @@
+@startuml
+
+!include ../../helper.pu
+
+title MMC块设备驱动Probe
+
+box "MMC Card Layer"
+participant "block.c" as mblk
+participant "queue.c" as mq 
+end box
+
+box "Block Layer"
+participant "block-core.c" as bcore
+end box
+
+box "Kernel Core"
+participant "kthread.c" as kthread
+end box
+
+send([, mblk, mmc_blk_probe())
+hnote left of mblk #cyan : mmc总线上添加新的卡设备后，开始Probe
+ssend(mblk, mmc_blk_alloc())
+ssend(mblk, mmc_blk_alloc_req())
+send(mblk, bcore, alloc_disk())
+return(mblk, bcore)
+send(mblk, mq, mmc_init_queue())
+send(mq, bcore, blk_init_queue(mmc_request, ...))
+note right
+设置mmc_request()
+为I/O请求队列的处理函数
+end note
+return(mq, bcore, )
+send(mq, kthread, kthread_run(mmc_queue_thread, ...))
+note right
+创建内核线程mmc_queue_thread：
+mq->thread = kthread_run(mmc_queue_thread, ...);
+end note
+back(mq, kthread)
+back(mblk, mq)
+sback(mblk)
+sback(mblk)
+back([, mblk)
+
+@enduml
